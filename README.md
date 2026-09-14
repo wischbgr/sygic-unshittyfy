@@ -12,6 +12,8 @@ You can stil login with your account to access your license. Sygic seems to be f
 
 All patches were originally derived against **26.4.2-115708**, but the update-resistant search logic (see below) has been confirmed working on the following versions:
 
+* [**26.5.4-118418**](https://apkpure.com/de/sygic-gps-navigation-maps-for-mobile/com.sygic.aura/download/26.5.4-118418)
+* [**26.4.3-116060**](https://apkpure.com/de/sygic-gps-navigation-maps-for-mobile/com.sygic.aura/download/26.4.3-116060)
 * [**26.4.2-115708**](https://apkpure.com/de/sygic-gps-navigation-maps-for-mobile/com.sygic.aura/download/26.4.2-115708)
 * [**26.4.1-114499**](https://apkpure.com/de/sygic-gps-navigation-maps-for-mobile/com.sygic.aura/download/26.4.1-114499)
 * [**26.3.2-112577**](https://apkpure.com/de/sygic-gps-navigation-maps-for-mobile/com.sygic.aura/download/26.3.2-112577)

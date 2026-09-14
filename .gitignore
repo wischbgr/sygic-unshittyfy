@@ -6,6 +6,7 @@
 *.keystore
 *.zip
 /deps/
+/apks/
 skin_override/
 skin_*/
 !skin_examples/

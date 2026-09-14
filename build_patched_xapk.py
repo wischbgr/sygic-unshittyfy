@@ -222,8 +222,14 @@ NATIVE_RES_OLD_1 = "    const/16 p2, 0x438"
 NATIVE_RES_NEW_1 = "    const/16 p2, 0x7fff"
 
 NATIVE_RES_SMALI_FILE_2 = "com/sygic/sdk/low/gl/GlSurfaceListenerFactory$GlSurfaceHolderCallback.smali"
-NATIVE_RES_OLD_2 = "    const/16 p2, 0x438"
-NATIVE_RES_NEW_2 = "    const/16 p2, 0x7fff"
+# Which register holds the 0x438 (1080) cap literal isn't stable across
+# builds -- confirmed drifting from p2 (26.4.2) to p4 (26.5.4) purely from an
+# unrelated register-allocation shift earlier in the same method (an extra
+# local got introduced), with the surrounding logic itself unchanged. Match
+# on the opcode + literal only and keep whatever register R8 picked, instead
+# of hardcoding one build's register name.
+NATIVE_RES_PATTERN_2 = re.compile(r"    const/16 (p\d+), 0x438")
+NATIVE_RES_REPL_2 = r"    const/16 \1, 0x7fff"
 
 DEBUG_LICENSES_SMALI_FILE = "com/sygic/navi/settings2/d.smali"
 # anchor on the DebugLicenses sget (unique in the file); the constructed Folder
@@ -258,8 +264,16 @@ DEBUG_LICENSES_REPL = "\\1nop\n\n    .line 49\n    return-object v0"
 # this to the stable prefix only -- older builds (e.g. 26.2.0) log just
 # "checkShowPromoDialog() called" without the later-added "- paywall" suffix.
 PROMO_DIALOG_LOG_STRING = "checkShowPromoDialog() called"
+# The enclosing method's own signature isn't stable across builds either: in
+# 26.4.2 it was "private static final foo(Lbar;)Lio/reactivex/SingleSource;";
+# in 26.5.4, R8 instead outlined it into a synthetic lambda class'
+# "public final call()Ljava/lang/Object;" (a java.util.concurrent.Callable
+# implementation) -- same body, labels, and fallback path, just a different
+# modifier/param/return-type shape around it. Match any method header instead
+# of one hardcoded shape; the log string (checked against each candidate's
+# body below) is what actually identifies the right method.
 PROMO_DIALOG_METHOD_PATTERN = re.compile(
-    r"(\.method private static final \w+\(L[\w/$]+;\)Lio/reactivex/SingleSource;\n"
+    r"(\.method [^\n]*\n"
     r"    \.registers \d+\n\n)(.*?)(\n\.end method)",
     re.DOTALL,
 )
@@ -779,7 +793,7 @@ def main():
                           patch_smali_text, NATIVE_RES_SMALI_FILE_1, NATIVE_RES_OLD_1, NATIVE_RES_NEW_1,
                           "LowGL$ViewScaling 1080px cap -> 32767")
                 try_patch(dex_patch, NATIVE_RES_SMALI_FILE_2,
-                          patch_smali_text, NATIVE_RES_SMALI_FILE_2, NATIVE_RES_OLD_2, NATIVE_RES_NEW_2,
+                          patch_smali_regex, NATIVE_RES_SMALI_FILE_2, NATIVE_RES_PATTERN_2, NATIVE_RES_REPL_2,
                           "GlSurfaceHolderCallback 1080px cap -> 32767")
             if args.debug_licenses:
                 try_patch(dex_patch, DEBUG_LICENSES_SMALI_FILE,
