@@ -3,4 +3,4 @@ name=Sygic FPS Unlock
 version=v1.8
 versionCode=9
 author=davidw
-description=Bind-mounts a patched base.apk + arm64-v8a split of com.sygic.aura over the installed ones, built with build_patched_xapk.py + build_apatch_module.py from github.com/wischbgr/sygic-patcher (see its README for exactly which patches this build includes). Original Play Store install/signature untouched.
+description=Bind-mounts a patched base.apk + arm64-v8a split of com.sygic.aura over the installed ones, built with build_patched_xapk.py + build_apatch_module.py from github.com/wischbgr/sygic-unshittyfy (see its README for exactly which patches this build includes). Original Play Store install/signature untouched.

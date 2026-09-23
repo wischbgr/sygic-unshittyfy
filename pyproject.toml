@@ -1,5 +1,5 @@
 [project]
-name = "sygic-patcher"
+name = "sygic-unshittyfy"
 version = "0.1.0"
 description = "Patch Sygic GPS Navigation & Maps for Android to unlock native framerate, native render resolution, the internal debug menu, and more."
 readme = "README.md"

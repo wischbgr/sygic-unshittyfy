@@ -1,4 +1,4 @@
-# sygic-patcher
+# sygic-unshittyfy
 
 **Patch Sygic GPS Navigation & Maps for Android** (`com.sygic.aura`) to unlock native fps, full render resolution, the internal debug menu, smoother map rotation easing, patch skin (map colors) and to kill promo popups on startup. You might call it **Sygic Unshittifier**.
 

@@ -1,4 +1,4 @@
-# sygic-patcher specific -- never commit Sygic's proprietary binaries, your
+# sygic-unshittyfy specific -- never commit Sygic's proprietary binaries, your
 # own signing key, or generated build output.
 *.apk
 *.xapk
