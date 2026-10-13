@@ -159,9 +159,16 @@ DEFAULT_KS_PASS = "pass:changeit"
 # which classesN.dex a class ends up in (see the dex/smali patches below),
 # so a hardcoded one wouldn't save anything reliable -- only a comment noting
 # where it originally was, for reference.
-# Originally at 0x1684c60 in 26.4.2-115708.
+# Originally at 0x1684c60 in 26.4.2-115708. No context_after (as of
+# 26.6.1-120585): the bytes right after the old float are a neighboring
+# entry in what looks like a small float/config table, and a new entry got
+# inserted into that table in this build -- shifting what immediately
+# follows even though the entry we actually target didn't move. ctx_before
+# plus the old float alone is already unique in every version tested
+# (26.2.0 through 26.6.1), so there's nothing to gain from an after-context
+# here either (mirrors the reasoning for TURN_EASE_CONTEXT_AFTER below).
 FPS_UNLOCK_CONTEXT_BEFORE = bytes.fromhex("010000000001000000000000c80a15ff")
-FPS_UNLOCK_CONTEXT_AFTER = bytes.fromhex("00004843070000001100000020000000")
+FPS_UNLOCK_CONTEXT_AFTER = b""
 FPS_UNLOCK_PATCH = (
     FPS_UNLOCK_CONTEXT_BEFORE,
     struct.pack("<f", -10.0),
@@ -180,7 +187,18 @@ FPS_UNLOCK_PATCH = (
 # unrelated to the actual patch target. context_before alone is already
 # unique in all four versions tested, so there's nothing to gain from an
 # after-context here.
-TURN_EASE_CONTEXT_BEFORE = bytes.fromhex("09030054966245b9e8230091e00314aa")
+#
+# context_before itself was originally the full 16 bytes right before the
+# instruction (3 whole preceding instructions: a register load, a stack-addr
+# add, and a mov). As of 26.6.1-120585, an unrelated register-allocation
+# shift changed which register that first load targets -- 2 bytes inside an
+# otherwise-unchanged instruction word -- breaking the exact 16-byte match
+# even though the actual patch target (the mov + its surrounding code) is
+# byte-identical. Shrunk to the trailing 10 bytes, which skips exactly that
+# drifting instruction while keeping the two still-identical ones after it;
+# confirmed unique (with TURN_EASE_OLD appended) in every version tested,
+# 26.2.0 through 26.6.1.
+TURN_EASE_CONTEXT_BEFORE = bytes.fromhex("45b9e8230091e00314aa")
 TURN_EASE_CONTEXT_AFTER = b""
 TURN_EASE_OLD = bytes.fromhex("e1031f2a")  # mov w1, wzr  (curve=0, Linear)
 TURN_EASE_CURVES = {
@@ -203,17 +221,36 @@ def turn_ease_new_bytes(curve_name):
 # (whole-dex vs single-class-file decode, version, etc.) and are NOT stable
 # across different decompile runs of the byte-identical dex, even though the
 # actual instructions are unique and stable.
-DEBUG_MENU_SMALI_FILE = "com/sygic/navi/settings2/d.smali"
-# anchor on the FEATURE_DEBUG_MENU sget (unique in the file), then the next
+#
+# anchor on the FEATURE_DEBUG_MENU sget (unique in the file), then the
 # "if-eqz v1, :cond_XX" that follows it is the isActive() branch to remove.
 # The enclosing enum class (Hx5 as of 26.4.2, Fx5 as of 26.4.1) is R8-assigned
 # and drifts across builds even when nothing about the feature itself changed
 # -- match it as a wildcard (backreferenced so both mentions agree) instead of
 # hardcoding one version's name, keying only on the stable field name.
+#
+# The sget -> invoke-virtual -> move-result -> if-eqz idiom is required to
+# happen back-to-back (no DOTALL/lazy-wildcard gap between them) rather than
+# "eventually, somewhere later in the file": as of 26.6.1-120585, several
+# unrelated classes landed in the same dex also reference FEATURE_DEBUG_MENU,
+# and at least one (a feature-toggle class, not the menu gate) happens to
+# also contain some *other*, unrelated "if-eqz v1, :cond_XX" further down --
+# a lazy DOTALL match would happily skip past that file's own differently-
+# registered branch (move-result v2, not v1) to reach it, mis-identifying an
+# unrelated file as the gate. Requiring the exact immediate sequence (same
+# register throughout, nothing else in between) only matches the true gate.
+#
+# The gap between each of those instructions is more than plain whitespace
+# in some builds: baksmali emits one or more ".line N" debug-info directives
+# between them (26.5.4/26.5.5 do; 26.6.1's gate doesn't) -- _DEBUG_MENU_GAP
+# tolerates any mix of blank lines and ".line N" directives without ever
+# matching an actual instruction, so it can't accidentally skip real code.
+_DEBUG_MENU_GAP = r"(?:\s|\.line \d+)*"
 DEBUG_MENU_PATTERN = re.compile(
-    r"(sget-object v1, L([\w/$]+);->FEATURE_DEBUG_MENU:L\2;.*?)"
-    r"if-eqz v1, :cond_\w+",
-    re.DOTALL,
+    r"(sget-object v1, L([\w/$]+);->FEATURE_DEBUG_MENU:L\2;" + _DEBUG_MENU_GAP +
+    r"invoke-virtual \{v1\}, L\2;->\w+\(\)Z" + _DEBUG_MENU_GAP +
+    r"move-result v1" + _DEBUG_MENU_GAP +
+    r")if-eqz v1, :cond_\w+"
 )
 DEBUG_MENU_REPL = r"\1nop"
 
@@ -418,6 +455,89 @@ def _find_dex_for_promo_dialog(base_path, dex_names, tmp, decompiled):
                    f"app version likely doesn't match what this script was derived against.")
     patch_fail(f"Ambiguous: the checkShowPromoDialog() debug string appears in {len(matches)} dex files "
                f"({', '.join(matches)}) -- can't safely pick one.")
+
+
+def _debug_menu_matches_in_root(root):
+    """All smali files under an already-decompiled dex root whose content
+    matches DEBUG_MENU_PATTERN (normally 0 or 1 -- see callers)."""
+    matches = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for fname in filenames:
+            if not fname.endswith(".smali"):
+                continue
+            path = os.path.join(dirpath, fname)
+            with open(path, "r") as f:
+                if DEBUG_MENU_PATTERN.search(f.read()):
+                    matches.append(path)
+    return matches
+
+
+def _find_dex_for_debug_menu(base_path, dex_names, tmp, decompiled):
+    """Unlike _find_dex_for_promo_dialog()'s debug-log string, the raw
+    FEATURE_DEBUG_MENU field name isn't confined to the one dex that defines
+    the gate -- e.g. 26.4.2/26.4.3 split it across classes5.dex (where the
+    enum itself lives) and classes6.dex (where the gate referencing it
+    lives), and any dex that merely *references* a field carries its name
+    string too. So a raw-byte scan only narrows candidates; it decompiles
+    every candidate and lets DEBUG_MENU_PATTERN's content match (the actual
+    gate, not just a reference) pick the one true dex -- same mechanism
+    _find_debug_menu_file() uses to pick the file within it."""
+    needle = b"FEATURE_DEBUG_MENU"
+    dex_candidates = []
+    with zipfile.ZipFile(base_path) as zf:
+        for dex_name in dex_names:
+            if needle in zf.read(dex_name):
+                dex_candidates.append(dex_name)
+    if not dex_candidates:
+        patch_fail("No classes*.dex contains the FEATURE_DEBUG_MENU field -- "
+                   "app version likely doesn't match what this script was derived against.")
+    hits = {}
+    for dex_name in dex_candidates:
+        smali_root = _get_smali_root(tmp, base_path, dex_name, decompiled)
+        found = _debug_menu_matches_in_root(smali_root)
+        if found:
+            hits[dex_name] = found
+    if len(hits) == 1:
+        return next(iter(hits))
+    if not hits:
+        patch_fail("FEATURE_DEBUG_MENU.isActive() gate not found in any classes*.dex -- "
+                   "app version likely doesn't match what this script was derived against.")
+    patch_fail(f"Ambiguous: the FEATURE_DEBUG_MENU.isActive() gate matched in {len(hits)} dex files "
+               f"({', '.join(hits)}) -- can't safely pick one.")
+
+
+def _find_debug_menu_file(root):
+    """Locate the smali file containing the FEATURE_DEBUG_MENU.isActive()
+    gate within an already-decompiled dex root (the one _find_dex_for_debug_menu
+    picked). The enclosing class/package is R8-assigned and, as of
+    26.6.1-120585, not just renamed but fully repackaged -- observed
+    com/sygic/navi/settings2/d.smali (26.4.2) become sdk/network/wnh.smali,
+    in a build where 4 other files in the same dex also reference
+    FEATURE_DEBUG_MENU for unrelated checks. DEBUG_MENU_PATTERN's exact-idiom
+    requirement (sget -> invoke-virtual -> move-result -> if-eqz, all the
+    same register, nothing else in between) is specific enough to pick the
+    one real gate out of those."""
+    matches = _debug_menu_matches_in_root(root)
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        patch_fail("FEATURE_DEBUG_MENU.isActive() gate not found in any smali file -- "
+                   "app version likely doesn't match what this script was derived against.")
+    patch_fail(f"Ambiguous: the FEATURE_DEBUG_MENU.isActive() gate matched in {len(matches)} smali files -- "
+               f"can't safely pick one ({', '.join(os.path.relpath(p, root) for p in matches)}).")
+
+
+def patch_debug_menu(root):
+    path = _find_debug_menu_file(root)
+    with open(path, "r") as f:
+        content = f.read()
+    new_content, n = DEBUG_MENU_PATTERN.subn(DEBUG_MENU_REPL, content, count=1)
+    if n == 0:
+        patch_fail("FEATURE_DEBUG_MENU.isActive() check not found -- "
+                   "app version likely doesn't match what this script was derived against.")
+    with open(path, "w") as f:
+        f.write(new_content)
+    ok(f"Patched: FEATURE_DEBUG_MENU.isActive() check nop'd out ({os.path.relpath(path, root)})")
 
 
 def _read_smali_file(root, rel_path, desc):
@@ -776,18 +896,18 @@ def main():
             decompiled = {}
             modified_dex = set()
 
-            def dex_patch(rel_path, patch_fn, *patch_args, promo=False):
+            def dex_patch(rel_path, patch_fn, *patch_args, promo=False, debug_menu=False):
                 if promo:
                     dex_name = _find_dex_for_promo_dialog(base_path, dex_names, tmp, decompiled)
+                elif debug_menu:
+                    dex_name = _find_dex_for_debug_menu(base_path, dex_names, tmp, decompiled)
                 else:
                     dex_name = _find_defining_dex(base_path, dex_names, tmp, decompiled, rel_path)
                 patch_fn(decompiled[dex_name], *patch_args)
                 modified_dex.add(dex_name)
 
             if args.debug_menu:
-                try_patch(dex_patch, DEBUG_MENU_SMALI_FILE,
-                          patch_smali_regex, DEBUG_MENU_SMALI_FILE, DEBUG_MENU_PATTERN, DEBUG_MENU_REPL,
-                          "FEATURE_DEBUG_MENU.isActive() check nop'd out")
+                try_patch(dex_patch, None, patch_debug_menu, debug_menu=True)
             if args.native_res:
                 try_patch(dex_patch, NATIVE_RES_SMALI_FILE_1,
                           patch_smali_text, NATIVE_RES_SMALI_FILE_1, NATIVE_RES_OLD_1, NATIVE_RES_NEW_1,
